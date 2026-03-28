@@ -1,0 +1,13 @@
+# build outputs
+bin/
+obj/
+
+# user secrets / local overrides
+appsettings.Development.json
+appsettings.Production.json
+
+# if you keep per-server settings locally, do not commit
+appsettings.local.json
+
+# OS
+.DS_Store
