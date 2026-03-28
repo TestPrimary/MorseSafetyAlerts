@@ -62,4 +62,40 @@ public class ExpoPushClient
 
         return new ExpoSendResult(true, raw, tickets);
     }
+
+    public async Task<(bool Ok, string RawJson, Dictionary<string, ExpoReceipt> Receipts)> GetReceiptsAsync(
+        IReadOnlyList<string> ticketIds,
+        CancellationToken ct)
+    {
+        if (ticketIds.Count == 0)
+        {
+            return (true, "{\"data\":{}}", new Dictionary<string, ExpoReceipt>());
+        }
+
+        var payload = new Dictionary<string, object>
+        {
+            ["ids"] = ticketIds,
+        };
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, _opt.Expo.PushReceiptsUrl)
+        {
+            Content = JsonContent.Create(payload),
+        };
+
+        using var resp = await _http.SendAsync(req, ct);
+        var raw = await resp.Content.ReadAsStringAsync(ct);
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            _log.LogWarning("Expo receipts HTTP {Status}: {Raw}", (int)resp.StatusCode, raw);
+            return (false, raw, new Dictionary<string, ExpoReceipt>());
+        }
+
+        var parsed = JsonSerializer.Deserialize<ExpoReceiptsResponse>(raw, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+        });
+
+        return (true, raw, parsed?.Data ?? new Dictionary<string, ExpoReceipt>());
+    }
 }

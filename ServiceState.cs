@@ -8,6 +8,9 @@ public class ServiceState
 
     public bool? LastStormActive { get; set; }
 
+    // TicketId -> processedUtc (used to avoid re-querying Expo receipts forever)
+    public Dictionary<string, DateTime> ProcessedReceiptTicketsUtc { get; set; } = new();
+
     public DateTime UpdatedUtc { get; set; }
 }
 

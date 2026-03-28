@@ -23,5 +23,14 @@ public record DeliveryRow(
     long DeliveryId,
     long PushTokenId,
     Guid InstallId,
-    string Token
+    string Token,
+    string? TicketId
+);
+
+public record SentDeliveryForReceiptRow(
+    long DeliveryId,
+    long PushTokenId,
+    Guid InstallId,
+    string ResponseJson,
+    DateTime UpdatedUtc
 );

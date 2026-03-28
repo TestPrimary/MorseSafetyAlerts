@@ -39,7 +39,11 @@ public class ExpoPushOptions
 {
     public string PushSendUrl { get; set; } = "https://exp.host/--/api/v2/push/send";
 
+    public string PushReceiptsUrl { get; set; } = "https://exp.host/--/api/v2/push/getReceipts";
+
     public int BatchSize { get; set; } = 100;
+
+    public int ReceiptBatchSize { get; set; } = 500;
 
     public string DefaultSound { get; set; } = "default";
 }

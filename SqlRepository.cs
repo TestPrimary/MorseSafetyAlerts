@@ -148,7 +148,7 @@ VALUES (@episodeId, @pushTokenId, @installId, 'pending', 1, NULL, NULL, NULL, NU
                     new CommandDefinition(sql, new { episodeId, pushTokenId = t.PushTokenId, installId = t.InstallId }, transaction: tx, cancellationToken: ct)
                 );
 
-                list.Add(new DeliveryRow(row.DeliveryId, row.PushTokenId, row.InstallId, t.Token));
+                list.Add(new DeliveryRow(row.DeliveryId, row.PushTokenId, row.InstallId, t.Token, TicketId: null));
             }
 
             await tx.CommitAsync(ct);
@@ -176,6 +176,40 @@ WHERE DeliveryId = @deliveryId;
 
         await using var conn = Open();
         await conn.ExecuteAsync(new CommandDefinition(sql, new { deliveryId, status, sentUtc, error, responseJson }, cancellationToken: ct));
+    }
+
+    public async Task<List<SentDeliveryForReceiptRow>> GetRecentSentDeliveriesForReceiptsAsync(int lookbackMinutes, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT TOP (5000)
+    DeliveryId,
+    PushTokenId,
+    InstallId,
+    ResponseJson,
+    UpdatedUtc
+FROM SafetyAlertDeliveries
+WHERE Status = 'sent'
+  AND ResponseJson IS NOT NULL
+  AND UpdatedUtc >= DATEADD(minute, -@lookbackMinutes, SYSUTCDATETIME())
+ORDER BY UpdatedUtc DESC;
+";
+
+        await using var conn = Open();
+        var rows = await conn.QueryAsync<SentDeliveryForReceiptRow>(new CommandDefinition(sql, new { lookbackMinutes }, cancellationToken: ct));
+        return rows.ToList();
+    }
+
+    public async Task DeactivatePushTokenAsync(long pushTokenId, CancellationToken ct)
+    {
+        const string sql = @"
+UPDATE SafetyPushTokens
+SET Active = 0,
+    UpdatedUtc = SYSUTCDATETIME()
+WHERE PushTokenId = @pushTokenId;
+";
+
+        await using var conn = Open();
+        await conn.ExecuteAsync(new CommandDefinition(sql, new { pushTokenId }, cancellationToken: ct));
     }
 
     public async Task<List<PushTargetRow>> GetRecipientsFromEpisodeAsync(long episodeId, CancellationToken ct)

@@ -10,6 +10,7 @@ public class Worker : BackgroundService
     private readonly NwsClient _nws;
     private readonly ExpoPushClient _expo;
     private readonly StateStore _stateStore;
+    private readonly StatusWriter _status;
 
     public Worker(
         ILogger<Worker> log,
@@ -17,7 +18,8 @@ public class Worker : BackgroundService
         SqlRepository db,
         NwsClient nws,
         ExpoPushClient expo,
-        StateStore stateStore)
+        StateStore stateStore,
+        StatusWriter status)
     {
         _log = log;
         _opt = opt;
@@ -25,16 +27,21 @@ public class Worker : BackgroundService
         _nws = nws;
         _expo = expo;
         _stateStore = stateStore;
+        _status = status;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var startedUtc = DateTime.UtcNow;
         _log.LogInformation("MorseSafetyAlerts starting. TickSeconds={TickSeconds}", _opt.TickSeconds);
 
         var state = _stateStore.Load();
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            var tickStart = DateTime.UtcNow;
+            string? lastError = null;
+
             try
             {
                 await TickAsync(state, stoppingToken);
@@ -46,7 +53,21 @@ public class Worker : BackgroundService
             }
             catch (Exception ex)
             {
+                lastError = ex.Message;
                 _log.LogError(ex, "Tick failed");
+            }
+            finally
+            {
+                _status.Write(new ServiceStatus(
+                    StartedUtc: startedUtc,
+                    LastTickStartUtc: tickStart,
+                    LastTickEndUtc: DateTime.UtcNow,
+                    LastStormActive: state.LastStormActive,
+                    ActiveStormEpisodeId: null,
+                    LastTargetsCount: null,
+                    LastSentCount: null,
+                    LastError: lastError
+                ));
             }
 
             try
@@ -78,6 +99,108 @@ public class Worker : BackgroundService
         state.LastStormActive = storm.Active;
 
         await HandleStormAsync(storm, ct);
+
+        // After sends, process receipts to clean up dead tokens.
+        await ProcessReceiptsAsync(state, ct);
+    }
+
+    private async Task ProcessReceiptsAsync(ServiceState state, CancellationToken ct)
+    {
+        // Prune old processed ticket IDs.
+        var cutoff = DateTime.UtcNow.AddDays(-2);
+        var toRemove = state.ProcessedReceiptTicketsUtc.Where(kvp => kvp.Value < cutoff).Select(kvp => kvp.Key).ToList();
+        foreach (var k in toRemove) state.ProcessedReceiptTicketsUtc.Remove(k);
+
+        var lookbackMinutes = 180;
+        var sent = await _db.GetRecentSentDeliveriesForReceiptsAsync(lookbackMinutes, ct);
+        if (sent.Count == 0) return;
+
+        var ticketToDelivery = new Dictionary<string, SentDeliveryForReceiptRow>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var d in sent)
+        {
+            var ticketId = TryExtractTicketId(d.ResponseJson);
+            if (string.IsNullOrWhiteSpace(ticketId)) continue;
+            if (state.ProcessedReceiptTicketsUtc.ContainsKey(ticketId)) continue;
+
+            // keep the newest delivery if duplicates happen
+            if (!ticketToDelivery.TryGetValue(ticketId, out var existing) || d.UpdatedUtc > existing.UpdatedUtc)
+            {
+                ticketToDelivery[ticketId] = d;
+            }
+        }
+
+        if (ticketToDelivery.Count == 0) return;
+
+        var receiptBatchSize = Math.Max(1, _opt.Expo.ReceiptBatchSize);
+        var ids = ticketToDelivery.Keys.ToList();
+
+        _log.LogInformation("Receipt check: tickets={Count}", ids.Count);
+
+        for (var i = 0; i < ids.Count; i += receiptBatchSize)
+        {
+            var batch = ids.Skip(i).Take(receiptBatchSize).ToList();
+            var (ok, raw, receipts) = await _expo.GetReceiptsAsync(batch, ct);
+
+            if (!ok)
+            {
+                _log.LogWarning("Receipt batch failed: {Raw}", raw);
+                continue;
+            }
+
+            foreach (var id in batch)
+            {
+                if (!receipts.TryGetValue(id, out var r) || r is null)
+                {
+                    // not ready yet
+                    continue;
+                }
+
+                state.ProcessedReceiptTicketsUtc[id] = DateTime.UtcNow;
+
+                if (ticketToDelivery.TryGetValue(id, out var d))
+                {
+                    if (string.Equals(r.Status, "ok", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // leave delivery as 'sent'
+                        continue;
+                    }
+
+                    var msg = r.Message ?? "expo-receipt-error";
+                    await _db.UpdateDeliveryAsync(d.DeliveryId, "failed", null, msg, JsonSerializer.Serialize(r), ct);
+
+                    // Deactivate bad tokens if applicable.
+                    if (r.Details is not null && r.Details.TryGetValue("error", out var errObj))
+                    {
+                        var err = errObj?.ToString();
+                        if (string.Equals(err, "DeviceNotRegistered", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _log.LogInformation("Deactivating PushTokenId={PushTokenId} due to DeviceNotRegistered", d.PushTokenId);
+                            await _db.DeactivatePushTokenAsync(d.PushTokenId, ct);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static string? TryExtractTicketId(string responseJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(responseJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            if (doc.RootElement.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+            {
+                return id.GetString();
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+
+        return null;
     }
 
     private async Task HandleStormAsync(NwsStormStatus storm, CancellationToken ct)
