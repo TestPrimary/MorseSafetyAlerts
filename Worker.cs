@@ -13,6 +13,12 @@ public class Worker : BackgroundService
     private readonly StatusWriter _status;
     private readonly LightningStrikeWindow _lightning;
 
+    // status telemetry (best-effort)
+    private long? _activeStormEpisodeId;
+    private long? _activeLightningEpisodeId;
+    private int _lightningCountInWindow;
+    private long _lightningLastStrikeMs;
+
     public Worker(
         ILogger<Worker> log,
         AlertsOptions opt,
@@ -64,14 +70,21 @@ public class Worker : BackgroundService
             }
             finally
             {
+                DateTime? lightningLastStrikeUtc = null;
+                if (_lightningLastStrikeMs > 0)
+                {
+                    lightningLastStrikeUtc = DateTimeOffset.FromUnixTimeMilliseconds(_lightningLastStrikeMs).UtcDateTime;
+                }
+
                 _status.Write(new ServiceStatus(
                     StartedUtc: startedUtc,
                     LastTickStartUtc: tickStart,
                     LastTickEndUtc: DateTime.UtcNow,
                     LastStormActive: state.LastStormActive,
-                    ActiveStormEpisodeId: null,
-                    LastTargetsCount: null,
-                    LastSentCount: null,
+                    ActiveStormEpisodeId: _activeStormEpisodeId,
+                    LightningCountInWindow: _lightningCountInWindow,
+                    LightningLastStrikeUtc: lightningLastStrikeUtc,
+                    ActiveLightningEpisodeId: _activeLightningEpisodeId,
                     LastError: lastError
                 ));
             }
@@ -222,6 +235,7 @@ public class Worker : BackgroundService
     {
         var now = DateTime.UtcNow;
         var activeEpisode = await _db.GetActiveEpisodeAsync("storm", ct);
+        _activeStormEpisodeId = activeEpisode?.EpisodeId;
 
         if (storm.Active && activeEpisode is null)
         {
@@ -288,7 +302,11 @@ public class Worker : BackgroundService
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         var snap = _lightning.GetSnapshot(nowMs);
+        _lightningCountInWindow = snap.CountInWindow;
+        _lightningLastStrikeMs = snap.LastStrikeMs;
+
         var activeEpisode = await _db.GetActiveEpisodeAsync("lightning", ct);
+        _activeLightningEpisodeId = activeEpisode?.EpisodeId;
 
         var trigger = Math.Max(1, _opt.Lightning.TriggerCount);
         var isActiveByWindow = snap.CountInWindow >= trigger;

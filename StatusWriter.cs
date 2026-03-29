@@ -8,8 +8,9 @@ public record ServiceStatus(
     DateTime? LastTickEndUtc,
     bool? LastStormActive,
     long? ActiveStormEpisodeId,
-    int? LastTargetsCount,
-    int? LastSentCount,
+    int? LightningCountInWindow,
+    DateTime? LightningLastStrikeUtc,
+    long? ActiveLightningEpisodeId,
     string? LastError
 );
 
