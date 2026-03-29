@@ -87,11 +87,17 @@ WHERE EpisodeId = @episodeId AND EndedUtc IS NULL;
         long episodeId,
         string geofenceKey,
         int geofenceFreshMinutes,
+        byte episodeSeverity,
         CancellationToken ct)
     {
         // Note: Tokens in our DB are Expo push tokens (ExponentPushToken[...] ).
         const string sql = @"
 DECLARE @cutoff datetime2 = DATEADD(minute, -@geofenceFreshMinutes, SYSUTCDATETIME());
+
+-- Quiet hours are stored as local minutes for America/Indianapolis.
+-- Requirement: use Windows tz id 'Eastern Standard Time'.
+DECLARE @nowLocal datetimeoffset = SYSUTCDATETIME() AT TIME ZONE 'UTC' AT TIME ZONE 'Eastern Standard Time';
+DECLARE @nowLocalMinutes int = (DATEPART(hour, @nowLocal) * 60) + DATEPART(minute, @nowLocal);
 
 SELECT TOP (5000)
     t.PushTokenId,
@@ -103,6 +109,26 @@ LEFT JOIN SafetyGeofenceStates g ON t.InstallId = g.InstallId
 WHERE t.Active = 1
   AND s.Enabled = 1
   AND s.StormEnabled = 1
+  AND @episodeSeverity >= ISNULL(s.MinSeverity, 1)
+  AND (
+        s.QuietStartLocalMinutes IS NULL
+        OR s.QuietEndLocalMinutes IS NULL
+        OR s.QuietStartLocalMinutes = s.QuietEndLocalMinutes
+        OR (
+            s.QuietStartLocalMinutes < s.QuietEndLocalMinutes
+            AND (
+                @nowLocalMinutes < s.QuietStartLocalMinutes
+                OR @nowLocalMinutes >= s.QuietEndLocalMinutes
+            )
+        )
+        OR (
+            s.QuietStartLocalMinutes > s.QuietEndLocalMinutes
+            AND (
+                @nowLocalMinutes >= s.QuietEndLocalMinutes
+                AND @nowLocalMinutes < s.QuietStartLocalMinutes
+            )
+        )
+      )
   AND (
         s.GpsOnlyEnabled = 0
         OR (
@@ -122,7 +148,10 @@ ORDER BY t.PushTokenId ASC;
 ";
 
         await using var conn = Open();
-        var rows = await conn.QueryAsync<PushTargetRow>(new CommandDefinition(sql, new { episodeId, geofenceKey, geofenceFreshMinutes }, cancellationToken: ct));
+        var rows = await conn.QueryAsync<PushTargetRow>(new CommandDefinition(
+            sql,
+            new { episodeId, geofenceKey, geofenceFreshMinutes, episodeSeverity },
+            cancellationToken: ct));
         return rows.ToList();
     }
 
@@ -130,10 +159,16 @@ ORDER BY t.PushTokenId ASC;
         long episodeId,
         string geofenceKey,
         int geofenceFreshMinutes,
+        byte episodeSeverity,
         CancellationToken ct)
     {
         const string sql = @"
 DECLARE @cutoff datetime2 = DATEADD(minute, -@geofenceFreshMinutes, SYSUTCDATETIME());
+
+-- Quiet hours are stored as local minutes for America/Indianapolis.
+-- Requirement: use Windows tz id 'Eastern Standard Time'.
+DECLARE @nowLocal datetimeoffset = SYSUTCDATETIME() AT TIME ZONE 'UTC' AT TIME ZONE 'Eastern Standard Time';
+DECLARE @nowLocalMinutes int = (DATEPART(hour, @nowLocal) * 60) + DATEPART(minute, @nowLocal);
 
 SELECT TOP (5000)
     t.PushTokenId,
@@ -145,6 +180,26 @@ LEFT JOIN SafetyGeofenceStates g ON t.InstallId = g.InstallId
 WHERE t.Active = 1
   AND s.Enabled = 1
   AND s.LightningEnabled = 1
+  AND @episodeSeverity >= ISNULL(s.MinSeverity, 1)
+  AND (
+        s.QuietStartLocalMinutes IS NULL
+        OR s.QuietEndLocalMinutes IS NULL
+        OR s.QuietStartLocalMinutes = s.QuietEndLocalMinutes
+        OR (
+            s.QuietStartLocalMinutes < s.QuietEndLocalMinutes
+            AND (
+                @nowLocalMinutes < s.QuietStartLocalMinutes
+                OR @nowLocalMinutes >= s.QuietEndLocalMinutes
+            )
+        )
+        OR (
+            s.QuietStartLocalMinutes > s.QuietEndLocalMinutes
+            AND (
+                @nowLocalMinutes >= s.QuietEndLocalMinutes
+                AND @nowLocalMinutes < s.QuietStartLocalMinutes
+            )
+        )
+      )
   AND (
         s.GpsOnlyEnabled = 0
         OR (
@@ -164,7 +219,10 @@ ORDER BY t.PushTokenId ASC;
 ";
 
         await using var conn = Open();
-        var rows = await conn.QueryAsync<PushTargetRow>(new CommandDefinition(sql, new { episodeId, geofenceKey, geofenceFreshMinutes }, cancellationToken: ct));
+        var rows = await conn.QueryAsync<PushTargetRow>(new CommandDefinition(
+            sql,
+            new { episodeId, geofenceKey, geofenceFreshMinutes, episodeSeverity },
+            cancellationToken: ct));
         return rows.ToList();
     }
 

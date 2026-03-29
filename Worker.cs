@@ -288,7 +288,7 @@ public class Worker : BackgroundService
                 endedUtc: null,
                 ct: ct);
 
-            var targets = await _db.GetStormTargetsForEpisodeAsync(episodeId, _opt.GeofenceKey, _opt.GeofenceFreshMinutes, ct);
+            var targets = await _db.GetStormTargetsForEpisodeAsync(episodeId, _opt.GeofenceKey, _opt.GeofenceFreshMinutes, storm.Severity, ct);
             _log.LogInformation("Storm episode {EpisodeId}: targets={Count}", episodeId, targets.Count);
 
             if (targets.Count == 0) return;
@@ -365,7 +365,7 @@ public class Worker : BackgroundService
                 endedUtc: null,
                 ct: ct);
 
-            var targets = await _db.GetLightningTargetsForEpisodeAsync(episodeId, _opt.GeofenceKey, _opt.GeofenceFreshMinutes, ct);
+            var targets = await _db.GetLightningTargetsForEpisodeAsync(episodeId, _opt.GeofenceKey, _opt.GeofenceFreshMinutes, 4, ct);
             _log.LogInformation("Lightning episode {EpisodeId}: targets={Count}", episodeId, targets.Count);
 
             if (targets.Count == 0) return;
