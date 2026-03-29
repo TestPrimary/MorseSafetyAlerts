@@ -44,6 +44,18 @@ dotnet publish -c Release -r win-x64 --self-contained true -o publish_out
 2) Ensure `appsettings.json` exists there with the real SQL connection string
 3) Restart the service
 
+## Testing (no API): command file triggers
+The service checks for a file at:
+- `C:\Services\MorseSafetyAlerts\state\commands.json`
+
+If present, it will execute the command once and archive it to `commands.last.json`.
+
+Examples:
+- Simulate lightning strikes:
+  - run `scripts\simulate-lightning.ps1 -Count 2`
+- Clear lightning window:
+  - run `scripts\clear-lightning.ps1`
+
 ```bat
 sc stop MorseSafetyAlerts
 sc start MorseSafetyAlerts

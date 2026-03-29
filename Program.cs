@@ -52,6 +52,12 @@ builder.Services.AddSingleton<StatusWriter>(sp =>
     return new StatusWriter(path, sp.GetRequiredService<ILogger<StatusWriter>>());
 });
 
+builder.Services.AddSingleton<CommandProcessor>(sp =>
+{
+    var path = Path.Combine(AppContext.BaseDirectory, "state", "commands.json");
+    return new CommandProcessor(path, sp.GetRequiredService<ILogger<CommandProcessor>>());
+});
+
 builder.Services.AddHttpClient<NwsClient>(c =>
 {
     c.Timeout = TimeSpan.FromSeconds(20);

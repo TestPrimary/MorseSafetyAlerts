@@ -12,6 +12,7 @@ public class Worker : BackgroundService
     private readonly StateStore _stateStore;
     private readonly StatusWriter _status;
     private readonly LightningStrikeWindow _lightning;
+    private readonly CommandProcessor _commands;
 
     // status telemetry (best-effort)
     private long? _activeStormEpisodeId;
@@ -27,7 +28,8 @@ public class Worker : BackgroundService
         ExpoPushClient expo,
         StateStore stateStore,
         StatusWriter status,
-        LightningStrikeWindow lightning)
+        LightningStrikeWindow lightning,
+        CommandProcessor commands)
     {
         _log = log;
         _opt = opt;
@@ -37,6 +39,7 @@ public class Worker : BackgroundService
         _stateStore = stateStore;
         _status = status;
         _lightning = lightning;
+        _commands = commands;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -104,6 +107,9 @@ public class Worker : BackgroundService
 
     private async Task TickAsync(ServiceState state, CancellationToken ct)
     {
+        // Apply any local command-file triggers (used for testing without an API).
+        ApplyCommands(state);
+
         // Storm alerts (NWS)
         var storm = await _nws.GetStormStatusAsync(state.NwsEtag, ct);
 
@@ -130,6 +136,37 @@ public class Worker : BackgroundService
 
         // After sends, process receipts to clean up dead tokens.
         await ProcessReceiptsAsync(state, ct);
+    }
+
+    private void ApplyCommands(ServiceState state)
+    {
+        var cmd = _commands.TryLoadAndArchive();
+        if (cmd is null) return;
+
+        if (cmd.ClearLightningWindow == true)
+        {
+            _log.LogInformation("COMMAND: ClearLightningWindow");
+            _lightning.SeedFromState(Array.Empty<long>(), 0);
+        }
+
+        var n = cmd.SimulateLightningStrikes ?? 0;
+        if (n > 0)
+        {
+            _log.LogInformation("COMMAND: SimulateLightningStrikes={Count}", n);
+
+            var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            // Add strikes in distinct seconds to avoid our dedupe logic.
+            for (var i = 0; i < n; i++)
+            {
+                var t = nowMs - (i * 2000L);
+                _lightning.AddStrike(t, _opt.Lightning.CenterLat, _opt.Lightning.CenterLon);
+            }
+        }
+
+        // Sync service state snapshot for persistence.
+        var exported = _lightning.ExportState(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        state.LightningRecentStrikeMs = exported.RecentStrikeMs;
+        state.LightningLastStrikeMs = exported.LastStrikeMs;
     }
 
     private async Task ProcessReceiptsAsync(ServiceState state, CancellationToken ct)
