@@ -1,4 +1,5 @@
 using MorseSafetyAlerts;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting.WindowsServices;
 
@@ -9,6 +10,12 @@ var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
     // Use the executable directory so appsettings.json is found reliably.
     ContentRootPath = AppContext.BaseDirectory,
 });
+
+// Be explicit about loading config from the executable directory.
+// (In practice, Windows services are very sensitive to working dir/base path.)
+var baseDir = AppContext.BaseDirectory;
+builder.Configuration.AddJsonFile(Path.Combine(baseDir, "appsettings.json"), optional: true, reloadOnChange: true);
+builder.Configuration.AddJsonFile(Path.Combine(baseDir, $"appsettings.{builder.Environment.EnvironmentName}.json"), optional: true, reloadOnChange: true);
 
 // When installed as a Windows Service, integrate with SCM.
 builder.Services.AddWindowsService(options =>
