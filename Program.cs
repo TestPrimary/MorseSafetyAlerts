@@ -2,6 +2,7 @@ using MorseSafetyAlerts;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting.WindowsServices;
+using Serilog;
 
 var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 {
@@ -16,6 +17,39 @@ var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 var baseDir = AppContext.BaseDirectory;
 builder.Configuration.AddJsonFile(Path.Combine(baseDir, "appsettings.json"), optional: true, reloadOnChange: true);
 builder.Configuration.AddJsonFile(Path.Combine(baseDir, $"appsettings.{builder.Environment.EnvironmentName}.json"), optional: true, reloadOnChange: true);
+
+// Serilog file logging: keep path/level/rolling interval in appsettings.json.
+// If the configured file path is relative, make it relative to the executable directory
+// so it works reliably when running as a Windows Service.
+const string serilogFilePathKey = "Serilog:WriteTo:0:Args:path";
+var configuredSerilogPath = builder.Configuration[serilogFilePathKey];
+if (!string.IsNullOrWhiteSpace(configuredSerilogPath))
+{
+    var resolvedPath = configuredSerilogPath;
+    if (!Path.IsPathRooted(resolvedPath))
+    {
+        resolvedPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, configuredSerilogPath));
+    }
+
+    var dir = Path.GetDirectoryName(resolvedPath);
+    if (!string.IsNullOrWhiteSpace(dir))
+    {
+        Directory.CreateDirectory(dir);
+    }
+
+    // Overlay the resolved path so Serilog reads the final value from configuration.
+    builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+    {
+        [serilogFilePathKey] = resolvedPath,
+    });
+}
+
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .CreateLogger();
+
+// Keep existing Console/EventLog providers; Serilog adds an additional sink (file).
+builder.Logging.AddSerilog(Log.Logger, dispose: true);
 
 // When installed as a Windows Service, integrate with SCM.
 builder.Services.AddWindowsService(options =>
@@ -74,5 +108,12 @@ builder.Services.AddHostedService<LightningMqttListener>();
 
 builder.Services.AddHostedService<Worker>();
 
-var host = builder.Build();
-host.Run();
+try
+{
+    var host = builder.Build();
+    host.Run();
+}
+finally
+{
+    Log.CloseAndFlush();
+}

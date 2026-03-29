@@ -21,6 +21,16 @@ Edit `appsettings.json` on the server (do not commit secrets):
 - `Alerts:Nws:*`
 - `Alerts:Lightning:*` (MQTT host/port/topics, radius, window, trigger)
 
+### Logging
+- Console + Windows Event Log (existing)
+- Rolling log files (Serilog) under:
+  - `C:\Services\MorseSafetyAlerts\logs\` (when installed to the default path)
+
+Controlled by `Serilog:*` in `appsettings.json`:
+- `Serilog:MinimumLevel:*`
+- `Serilog:WriteTo[0]:Args:path` (relative paths are resolved against the executable directory)
+- `Serilog:WriteTo[0]:Args:rollingInterval`
+
 ## DB dependencies
 Uses tables created by MORSEINDIANAAPI:
 - `SafetyPushTokens`

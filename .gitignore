@@ -2,6 +2,10 @@
 bin/
 obj/
 
+# runtime outputs
+logs/
+state/
+
 # user secrets / local overrides
 appsettings.Development.json
 appsettings.Production.json
