@@ -62,6 +62,10 @@ builder.Services.AddHttpClient<ExpoPushClient>(c =>
     c.Timeout = TimeSpan.FromSeconds(20);
 });
 
+// Lightning
+builder.Services.AddSingleton<LightningStrikeWindow>(sp => new LightningStrikeWindow(alertsOpt.Lightning));
+builder.Services.AddHostedService<LightningMqttListener>();
+
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();

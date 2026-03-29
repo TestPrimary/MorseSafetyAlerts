@@ -11,6 +11,7 @@ public class Worker : BackgroundService
     private readonly ExpoPushClient _expo;
     private readonly StateStore _stateStore;
     private readonly StatusWriter _status;
+    private readonly LightningStrikeWindow _lightning;
 
     public Worker(
         ILogger<Worker> log,
@@ -19,7 +20,8 @@ public class Worker : BackgroundService
         NwsClient nws,
         ExpoPushClient expo,
         StateStore stateStore,
-        StatusWriter status)
+        StatusWriter status,
+        LightningStrikeWindow lightning)
     {
         _log = log;
         _opt = opt;
@@ -28,6 +30,7 @@ public class Worker : BackgroundService
         _expo = expo;
         _stateStore = stateStore;
         _status = status;
+        _lightning = lightning;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -36,6 +39,9 @@ public class Worker : BackgroundService
         _log.LogInformation("MorseSafetyAlerts starting. TickSeconds={TickSeconds}", _opt.TickSeconds);
 
         var state = _stateStore.Load();
+
+        // Seed lightning rolling window (best-effort) from persisted state.
+        _lightning.SeedFromState(state.LightningRecentStrikeMs, state.LightningLastStrikeMs);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -85,20 +91,29 @@ public class Worker : BackgroundService
 
     private async Task TickAsync(ServiceState state, CancellationToken ct)
     {
-        // Phase 1: Storm alerts (NWS). Lightning relay will be added next.
+        // Storm alerts (NWS)
         var storm = await _nws.GetStormStatusAsync(state.NwsEtag, ct);
 
         // If NWS returns 304, we don't have new information.
-        if (storm.Title == "(not-modified)")
+        if (storm.Title != "(not-modified)")
+        {
+            state.NwsEtag = storm.ETag;
+            state.LastStormActive = storm.Active;
+            await HandleStormAsync(storm, ct);
+        }
+        else
         {
             _log.LogDebug("NWS not modified.");
-            return;
         }
 
-        state.NwsEtag = storm.ETag;
-        state.LastStormActive = storm.Active;
+        // Lightning alerts (MQTT rolling window)
+        await HandleLightningAsync(state, ct);
 
-        await HandleStormAsync(storm, ct);
+        // Persist lightning rolling window state.
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var exported = _lightning.ExportState(nowMs);
+        state.LightningRecentStrikeMs = exported.RecentStrikeMs;
+        state.LightningLastStrikeMs = exported.LastStrikeMs;
 
         // After sends, process receipts to clean up dead tokens.
         await ProcessReceiptsAsync(state, ct);
@@ -265,6 +280,84 @@ public class Worker : BackgroundService
 
         // No state transition.
         _log.LogDebug("Storm no-change. active={Active} episode={Episode}", storm.Active, activeEpisode?.EpisodeId);
+    }
+
+    private async Task HandleLightningAsync(ServiceState state, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var snap = _lightning.GetSnapshot(nowMs);
+        var activeEpisode = await _db.GetActiveEpisodeAsync("lightning", ct);
+
+        var trigger = Math.Max(1, _opt.Lightning.TriggerCount);
+        var isActiveByWindow = snap.CountInWindow >= trigger;
+
+        if (isActiveByWindow && activeEpisode is null)
+        {
+            _log.LogInformation("Lightning became ACTIVE. strikes={Count} windowMin={WindowMin}", snap.CountInWindow, _opt.Lightning.WindowMinutes);
+
+            var title = "Lightning Alert";
+            var msg = $"Lightning detected near Morse Reservoir: {snap.CountInWindow}+ strikes in the last {_opt.Lightning.WindowMinutes} minutes (within {_opt.Lightning.RadiusMiles:0} mi).";
+
+            var episodeId = await _db.CreateEpisodeAsync(
+                alertType: "lightning",
+                geofenceKey: _opt.GeofenceKey,
+                title: title,
+                message: msg,
+                severity: 4,
+                startedUtc: now,
+                endedUtc: null,
+                ct: ct);
+
+            var targets = await _db.GetLightningTargetsForEpisodeAsync(episodeId, _opt.GeofenceKey, _opt.GeofenceFreshMinutes, ct);
+            _log.LogInformation("Lightning episode {EpisodeId}: targets={Count}", episodeId, targets.Count);
+
+            if (targets.Count == 0) return;
+
+            var deliveries = await _db.CreatePendingDeliveriesAsync(episodeId, targets, ct);
+            await SendAndUpdateDeliveriesAsync(episodeId, title, msg, deliveries, ct);
+
+            return;
+        }
+
+        if (!isActiveByWindow && activeEpisode is not null)
+        {
+            // All-clear rule: 0 strikes for the full window duration.
+            var windowMs = snap.WindowMs;
+            var lastStrikeMs = snap.LastStrikeMs;
+            if (lastStrikeMs > 0 && (nowMs - lastStrikeMs) < windowMs)
+            {
+                _log.LogDebug("Lightning quiet but waiting all-clear window. sinceLastMs={Ms}", (nowMs - lastStrikeMs));
+                return;
+            }
+
+            _log.LogInformation("Lightning became CLEAR. Sending all-clear and ending episode {EpisodeId}.", activeEpisode.EpisodeId);
+
+            var recipients = await _db.GetRecipientsFromEpisodeAsync(activeEpisode.EpisodeId, ct);
+            _log.LogInformation("Lightning all-clear recipients from episode {EpisodeId}: {Count}", activeEpisode.EpisodeId, recipients.Count);
+
+            var clearEpisodeId = await _db.CreateEpisodeAsync(
+                alertType: "lightning",
+                geofenceKey: _opt.GeofenceKey,
+                title: "All Clear",
+                message: "Lightning has cleared near Morse Reservoir.",
+                severity: 1,
+                startedUtc: now,
+                endedUtc: now,
+                ct: ct);
+
+            if (recipients.Count > 0)
+            {
+                var clearDeliveries = await _db.CreatePendingDeliveriesAsync(clearEpisodeId, recipients, ct);
+                await SendAndUpdateDeliveriesAsync(clearEpisodeId, "All Clear", "Lightning has cleared near Morse Reservoir.", clearDeliveries, ct);
+            }
+
+            await _db.EndEpisodeAsync(activeEpisode.EpisodeId, now, ct);
+            return;
+        }
+
+        _log.LogDebug("Lightning no-change. activeByWindow={Active} strikes={Count} episode={Episode}", isActiveByWindow, snap.CountInWindow, activeEpisode?.EpisodeId);
     }
 
     private async Task SendAndUpdateDeliveriesAsync(

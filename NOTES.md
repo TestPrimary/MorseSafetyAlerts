@@ -10,14 +10,18 @@ Per Jim’s requirements:
 - Does not require an API endpoint to initiate sending
 
 ## Current status
-- Implemented: **Storm** polling via NWS active alerts endpoint (point query)
-- Episode logic: start + all-clear
+- Implemented:
+  - **Storm** polling via NWS active alerts endpoint (point query)
+  - **Lightning** watcher via Blitzortung MQTT subscription with rolling window + threshold
+- Episode logic: start + all-clear (storm + lightning)
 - Targeting logic:
-  - Requires `SafetyAlertSettings.Enabled=1` and `StormEnabled=1`
+  - Storm: `Enabled=1` and `StormEnabled=1`
+  - Lightning: `Enabled=1` and `LightningEnabled=1`
   - If `GpsOnlyEnabled=1`, requires `SafetyGeofenceStates.InGeofence=1` with fresh timestamp
 - Delivery tracking:
   - Inserts rows into `SafetyAlertDeliveries`
   - Marks `sent` or `failed` based on Expo ticket response
+  - Receipt polling cleans up dead tokens (DeviceNotRegistered → deactivate)
 
 ## Installed on jwebserver1
 - `C:\Services\MorseSafetyAlerts`

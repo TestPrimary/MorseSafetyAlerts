@@ -8,6 +8,11 @@ public class ServiceState
 
     public bool? LastStormActive { get; set; }
 
+    // Lightning rolling window state (best-effort persistence across restarts)
+    public List<long> LightningRecentStrikeMs { get; set; } = new();
+
+    public long LightningLastStrikeMs { get; set; } = 0;
+
     // TicketId -> processedUtc (used to avoid re-querying Expo receipts forever)
     public Dictionary<string, DateTime> ProcessedReceiptTicketsUtc { get; set; } = new();
 

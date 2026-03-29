@@ -3,6 +3,7 @@
 Windows Service that runs on **jwebserver1** and periodically:
 
 - Polls NWS active alerts near Morse Reservoir
+- Subscribes to Blitzortung MQTT strike feed (geohash-tiled topics) and maintains a rolling lightning strike window
 - Creates/ends safety alert episodes in SQL
 - Sends push notifications via **Expo Push API** to devices registered in the Morse Indiana API DB
 
@@ -18,6 +19,7 @@ Edit `appsettings.json` on the server (do not commit secrets):
 - `ConnectionStrings:MorseIndiana` (SQL connection string)
 - `Alerts:TickSeconds`
 - `Alerts:Nws:*`
+- `Alerts:Lightning:*` (MQTT host/port/topics, radius, window, trigger)
 
 ## DB dependencies
 Uses tables created by MORSEINDIANAAPI:

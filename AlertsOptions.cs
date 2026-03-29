@@ -11,7 +11,34 @@ public class AlertsOptions
 
     public NwsOptions Nws { get; set; } = new();
 
+    public LightningOptions Lightning { get; set; } = new();
+
     public ExpoPushOptions Expo { get; set; } = new();
+}
+
+public class LightningOptions
+{
+    // Blitzortung MQTT
+    public string MqttHost { get; set; } = "blitzortung.ha.sed.pl";
+
+    public int MqttPort { get; set; } = 1883;
+
+    public List<string> Topics { get; set; } = new()
+    {
+        "blitzortung/1.1/d/p/4/#",
+        "blitzortung/1.1/d/p/5/#",
+    };
+
+    // Morse center
+    public double CenterLat { get; set; } = 40.10321;
+
+    public double CenterLon { get; set; } = -86.03882;
+
+    public double RadiusMiles { get; set; } = 15;
+
+    public int WindowMinutes { get; set; } = 10;
+
+    public int TriggerCount { get; set; } = 2;
 }
 
 public class NwsOptions

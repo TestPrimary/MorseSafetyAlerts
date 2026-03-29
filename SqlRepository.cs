@@ -126,6 +126,48 @@ ORDER BY t.PushTokenId ASC;
         return rows.ToList();
     }
 
+    public async Task<List<PushTargetRow>> GetLightningTargetsForEpisodeAsync(
+        long episodeId,
+        string geofenceKey,
+        int geofenceFreshMinutes,
+        CancellationToken ct)
+    {
+        const string sql = @"
+DECLARE @cutoff datetime2 = DATEADD(minute, -@geofenceFreshMinutes, SYSUTCDATETIME());
+
+SELECT TOP (5000)
+    t.PushTokenId,
+    t.InstallId,
+    t.Token
+FROM SafetyPushTokens t
+JOIN SafetyAlertSettings s ON t.InstallId = s.InstallId
+LEFT JOIN SafetyGeofenceStates g ON t.InstallId = g.InstallId
+WHERE t.Active = 1
+  AND s.Enabled = 1
+  AND s.LightningEnabled = 1
+  AND (
+        s.GpsOnlyEnabled = 0
+        OR (
+            g.InstallId IS NOT NULL
+            AND g.InGeofence = 1
+            AND g.GeofenceKey = @geofenceKey
+            AND g.UpdatedUtc >= @cutoff
+        )
+      )
+  AND NOT EXISTS (
+        SELECT 1
+        FROM SafetyAlertDeliveries d
+        WHERE d.EpisodeId = @episodeId
+          AND d.PushTokenId = t.PushTokenId
+      )
+ORDER BY t.PushTokenId ASC;
+";
+
+        await using var conn = Open();
+        var rows = await conn.QueryAsync<PushTargetRow>(new CommandDefinition(sql, new { episodeId, geofenceKey, geofenceFreshMinutes }, cancellationToken: ct));
+        return rows.ToList();
+    }
+
     public async Task<List<DeliveryRow>> CreatePendingDeliveriesAsync(long episodeId, IReadOnlyList<PushTargetRow> targets, CancellationToken ct)
     {
         const string sql = @"
